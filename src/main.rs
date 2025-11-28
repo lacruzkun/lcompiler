@@ -57,7 +57,7 @@ fn main() {
 
 fn lex(mut input: String) -> Result<Vec<Token>, Box<dyn Error>> {
     let re = Regex::new(
-        r"(?P<lparen>\()|(?P<rparen>\))|(?P<rbrace>\})|(?P<lbrace>\{)|(?P<semicolon>;)|(?P<iden>[a-zA-Z_]\w*\b)|(?P<intliteral>[0-9]+\b)|(?P<comment>\//)|(?P<longcomment>/\*[[:ascii:]]\w*)",
+        r"(?P<lparen>\()|(?P<rparen>\))|(?P<rbrace>\})|(?P<lbrace>\{)|(?P<semicolon>;)|(?P<iden>[a-zA-Z_]\w*\b)|(?P<intliteral>[0-9]+\b)|(?P<comment>\//)|(?P<longcomment>/\*[\s\S]*\*/)",
     )
     .unwrap();
     let mut output = vec![];
@@ -65,7 +65,7 @@ fn lex(mut input: String) -> Result<Vec<Token>, Box<dyn Error>> {
     println!("{input}");
 
     while !input.is_empty() {
-        input = input.trim_start().to_string();
+        input = input.trim().to_string();
 
         if let Some(cap) = re.captures(&input) {
             if let Some(m) = cap.name("lparen") {
