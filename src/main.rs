@@ -1,114 +1,191 @@
-use std::fs;
+use clap::Parser;
+use regex::Regex;
+use std::{error::Error, fs, process};
 
 #[derive(Debug)]
-enum Token{
-    OpenBrace,
-    CloseBrace,
-    OpenParen,
-    CloseParen,
+enum Token {
+    Lparen,
+    Rparen,
+    Lbrace,
+    Rbrace,
     SemiColon,
     Int,
     Return,
-    Identifier,
-    IntLiteral
+    Void,
+    Identifier(String),
+    IntLiteral(i32),
 }
+
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(short, long)]
+    lex: bool,
+    #[arg(short, long)]
+    parse: bool,
+    #[arg(short, long)]
+    codegen: bool,
+    filename: Option<String>,
+}
+// fn main() {
+//     let re = Regex::new(r"Hello (?<name>\w+)!").unwrap();
+//     let Some(caps) = re.captures("Hello Murphy! Hello Cappy!") else {
+//         println!("no match!");
+//         return;
+//     };
+//     println!("The name is: {}", &caps["name"]);
+// }
 
 fn main() {
-    let argv: Vec<String> = std::env::args().collect();
-    println!("{:?}", argv[1]);
-    lex(argv[1].clone()).unwrap();
+    let arg = Args::parse();
+    let input = fs::read_to_string(arg.filename.expect("pass filename as argument"))
+        .expect("file should exist");
+    if arg.lex {
+        match lex(input.clone()) {
+            Ok(x) => println!("{:?}", x),
+            Err(_) => process::exit(1),
+        }
+    }
+    // } else if arg.parse {
+    //     lex(input.clone());
+    //     parse(input.clone());
+    // } else if arg.codegen {
+    //     lex(input.clone());
+    //     parse(input.clone());
+    //     codegen(input.clone());
+    // }
 }
 
-fn lex(file_name: String) -> Result<Vec<Token>, String>{
-    let content = fs::read_to_string(file_name).map_err(|e| e.to_string())?;
+fn lex(mut input: String) -> Result<Vec<Token>, Box<dyn Error>> {
+    let re = Regex::new(
+        r"(?P<lparen>\()|(?P<rparen>\))|(?P<rbrace>\})|(?P<lbrace>\{)|(?P<semicolon>;)|(?P<iden>[a-zA-Z_]\w*\b)|(?P<intliteral>[0-9]+\b)|(?P<comment>\//)|(?P<longcomment>/\*[[:ascii:]]\w*)",
+    )
+    .unwrap();
+    let mut output = vec![];
 
-    let mut buf = String::new();
-    let mut list = Vec::new();
-    let mut token_list = Vec::new();
-    let mut previous_ch: char = 0 as char;
+    println!("{input}");
 
-    let mut first_pass = true;
+    while !input.is_empty() {
+        input = input.trim_start().to_string();
 
-    // split the file by text
-    for ch in content.chars(){
-        if ch.is_alphabetic(){
-            if previous_ch.is_ascii_punctuation(){
-                buf.clear();
-            }
-            else if !previous_ch.is_alphabetic() && !first_pass && !buf.is_empty(){
-                list.push(buf.clone());
-                buf.clear();
-            }
-            buf.push(ch);
-            first_pass = false;
-        }
-        else if ch.is_numeric(){
-            if !previous_ch.is_numeric(){
-                list.push(buf.clone());
-                buf.clear();
-            }
-            buf.push(ch);
-        }
-        else if ch.is_ascii_punctuation(){
-            if !buf.is_empty(){
-                if !previous_ch.is_ascii_punctuation(){
-                    list.push(buf.clone());
+        if let Some(cap) = re.captures(&input) {
+            if let Some(m) = cap.name("lparen") {
+                if m.start() == 0 {
+                    input = input[m.end()..].to_string();
+                    output.push(Token::Lparen);
+                } else {
+                    println!(
+                        "Encountered an unknowned token {}",
+                        input[0..m.start()].to_string()
+                    );
+                    return Err("Unknown token".into());
                 }
+            } else if let Some(m) = cap.name("rparen") {
+                if m.start() == 0 {
+                    output.push(Token::Rparen);
+                    input = input[m.end()..].to_string();
+                } else {
+                    println!(
+                        "Encountered an unknowned token {}",
+                        input[0..m.start()].to_string()
+                    );
+                    return Err("Unknown token".into());
+                }
+            } else if let Some(m) = cap.name("lbrace") {
+                if m.start() == 0 {
+                    output.push(Token::Lbrace);
+                    input = input[m.end()..].to_string();
+                } else {
+                    println!(
+                        "Encountered an unknowned token {}",
+                        input[0..m.start()].to_string()
+                    );
+                    return Err("Unknown token".into());
+                }
+            } else if let Some(m) = cap.name("rbrace") {
+                if m.start() == 0 {
+                    output.push(Token::Rbrace);
+                    input = input[m.end()..].to_string();
+                } else {
+                    println!(
+                        "Encountered an unknowned token {}",
+                        input[0..m.start()].to_string()
+                    );
+                    return Err("Unknown token".into());
+                }
+            } else if let Some(m) = cap.name("semicolon") {
+                if m.start() == 0 {
+                    output.push(Token::SemiColon);
+                    input = input[m.end()..].to_string();
+                } else {
+                    println!(
+                        "Encountered an unknowned token {}",
+                        input[0..m.start()].to_string()
+                    );
+                    return Err("Unknown token".into());
+                }
+            } else if let Some(m) = cap.name("iden") {
+                if m.start() == 0 {
+                    match m.as_str() {
+                        "int" => output.push(Token::Int),
+                        "void" => output.push(Token::Void),
+                        "return" => output.push(Token::Return),
+                        x => output.push(Token::Identifier(x.to_string())),
+                    }
+                    input = input[m.end()..].to_string();
+                } else {
+                    println!(
+                        "Encountered an unknowned token {}",
+                        input[0..m.start()].to_string()
+                    );
+                    return Err("Unknown token".into());
+                }
+            } else if let Some(m) = cap.name("intliteral") {
+                if m.start() == 0 {
+                    output.push(Token::IntLiteral(
+                        m.as_str()
+                            .parse()
+                            .expect("should be abled to convert to integer"),
+                    ));
+                    input = input[m.end()..].to_string();
+                } else {
+                    println!(
+                        "Encountered an unknowned token {}",
+                        input[0..m.start()].to_string()
+                    );
+                    return Err("Unknown token".into());
+                }
+            } else if let Some(m) = cap.name("comment") {
+                if m.start() == 0 {
+                    println!("comment");
+                    input = input[input.find('\n').unwrap_or(1) + 1..].to_string();
+                } else {
+                    println!(
+                        "Encountered an unknowned token {}",
+                        input[0..m.start()].to_string()
+                    );
+                    return Err("Unknown token".into());
+                }
+            } else if let Some(m) = cap.name("longcomment") {
+                println!("{:?}", m);
+                if m.start() == 0 {
+                    println!("longcomment");
+                    input = input[input.find('\n').unwrap_or(1) + 1..].to_string();
+                }
+            } else {
+                println!("Encountered an unknowned token first else {}", input);
+                return Err("Unknown token".into());
             }
-            buf.clear();
-            buf.push(ch);
-            list.push(buf.clone());
+        } else {
+            println!("Encountered an unknowned token, {}", input);
+            return Err("Unknown token".into());
         }
-        else if ch.is_whitespace(){
-            if previous_ch.is_ascii_punctuation(){
-                continue;
-            }
-            if !buf.is_empty(){
-                list.push(buf.clone());
-                buf.clear();
-            }
-            continue;
-        }
-        previous_ch = ch;
-
     }
-    println!("{:?}", list);
-
-    // tokenize the text
-    for token in list {
-        if token == "("{
-            token_list.push(Token::OpenParen);
-        }
-        else if token == ")"{
-            token_list.push(Token::CloseParen);
-        }
-        else if token == "{"{
-            token_list.push(Token::OpenBrace);
-        }
-        else if token == "}"{
-            token_list.push(Token::CloseBrace);
-        }
-
-        else if token == ";"{
-            token_list.push(Token::SemiColon);
-        }
-        else if token == "int"{
-            token_list.push(Token::Int);
-        }
-        else if token == "return"{
-            token_list.push(Token::Return);
-        }
-        else if token.chars().all(|c| c.is_ascii_digit()){
-            token_list.push(Token::IntLiteral);
-        }
-        else {
-            token_list.push(Token::Identifier);
-        }
-    }
-
-    println!("{:?}", token_list);
-
-
-    return Ok(token_list);
-
+    Ok(output)
 }
+
+// fn parse(mut _input: String) -> Result<(), Box<dyn Error>> {
+//     Ok(())
+// }
+// fn codegen(mut _input: String) -> Result<(), Box<dyn Error>> {
+//     Ok(())
+// }
