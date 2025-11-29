@@ -15,29 +15,52 @@ enum Token {
     Identifier(String),
     IntLiteral(i32),
 }
+
+// Data structures for the AST
 #[derive(Debug, Clone)]
-enum Exp {
+enum AstExp {
     Constant(i32),
 }
 
 #[derive(Debug, Clone)]
-enum Statement {
-    Return(Exp),
-}
-
-// #[derive(Debug, Clone)]
-// enum Identifier {
-//     String,
-// }
-
-#[derive(Debug, Clone)]
-enum FuncDef {
-    Function { name: String, body: Statement },
+enum AstStatement {
+    Return(AstExp),
 }
 
 #[derive(Debug, Clone)]
-enum Prog {
-    Program(FuncDef),
+enum AstFuncDef {
+    Function { name: String, body: AstStatement },
+}
+
+#[derive(Debug, Clone)]
+enum AstProg {
+    Program(AstFuncDef),
+}
+
+// Data Structures for the assembly code
+#[derive(Debug, Clone)]
+enum AsmOperand {
+    Imm(i32),
+    Register,
+}
+
+#[derive(Debug, Clone)]
+enum AsmInstruction {
+    Mov { src: AsmOperand, dst: AsmOperand },
+    Ret,
+}
+
+#[derive(Debug, Clone)]
+enum AsmFuncDef {
+    Function {
+        name: String,
+        instructions: Vec<AsmInstruction>,
+    },
+}
+
+#[derive(Debug, Clone)]
+enum AsmProg {
+    Program(AsmFuncDef),
 }
 
 #[derive(Debug)]
@@ -97,11 +120,11 @@ fn main() {
     let input = fs::read_to_string(arg.filename.expect("pass filename as argument"))
         .expect("file should exist");
     let input = input.as_str();
-    if arg.codegen || arg.parse {
+    if arg.codegen {
         arg.parse = true;
-        if arg.parse {
-            arg.lex = true;
-        }
+    }
+    if arg.parse {
+        arg.lex = true;
     }
 
     if arg.lex {
@@ -117,8 +140,8 @@ fn main() {
             }
         };
         if arg.parse {
-            let parse_r = parse(lex_result);
-            let _parse_resutl = match parse_r {
+            let parse_r = parse_ast(lex_result);
+            let parse_result = match parse_r {
                 Ok(x) => {
                     println!("{:?}", x);
                     x
@@ -128,13 +151,12 @@ fn main() {
                     process::exit(1)
                 }
             };
+            if arg.codegen {
+                let codegen_r = parse_asm(parse_result);
+                println!("{:?}", codegen_r);
+            }
         }
     }
-    // } else if arg.codegen {
-    //     lex(input.clone());
-    //     parse(input.clone());
-    //     codegen(input.clone());
-    // }
 }
 
 fn lex(mut input: &str) -> Result<Vec<Token>, LexError> {
@@ -204,12 +226,56 @@ fn lex(mut input: &str) -> Result<Vec<Token>, LexError> {
     Ok(output)
 }
 
-fn parse(mut input: Vec<Token>) -> Result<Prog, ParseError> {
+fn parse_ast(mut input: Vec<Token>) -> Result<AstProg, ParseError> {
     let program = parse_func(&mut input)?;
-    Ok(Prog::Program(program))
+    Ok(AstProg::Program(program))
 }
 
-fn parse_func(mut input: &mut Vec<Token>) -> Result<FuncDef, ParseError> {
+fn parse_asm(input: AstProg) -> AsmProg {
+    match input {
+        AstProg::Program(ast_program) => AsmProg::Program(parse_asm_func(ast_program)),
+    }
+}
+
+fn parse_asm_func(mut input: AstFuncDef) -> AsmFuncDef {
+    match input {
+        AstFuncDef::Function { name, body } => {
+            let asm_name = parse_asm_name(name);
+            let asm_instructions = parse_asm_instruction(body);
+            AsmFuncDef::Function {
+                name: asm_name,
+                instructions: asm_instructions,
+            }
+        }
+    }
+}
+
+fn parse_asm_name(input: String) -> String {
+    input
+}
+
+fn parse_asm_instruction(input: AstStatement) -> Vec<AsmInstruction> {
+    match input {
+        AstStatement::Return(exp) => {
+            let mut inst = vec![];
+            let asm_exp = parse_asm_exp(exp);
+            inst.push(AsmInstruction::Mov {
+                src: asm_exp,
+                dst: AsmOperand::Register,
+            });
+            inst.push(AsmInstruction::Ret);
+            inst
+        }
+    }
+}
+
+fn parse_asm_exp(input: AstExp) -> AsmOperand {
+    match input {
+        AstExp::Constant(x) => AsmOperand::Imm(x),
+    }
+}
+
+fn parse_func(mut input: &mut Vec<Token>) -> Result<AstFuncDef, ParseError> {
     expect(Token::Int, &mut input)?;
     let identifier = parse_identifier(&mut input)?;
     expect(Token::Lparen, &mut input)?;
@@ -218,7 +284,14 @@ fn parse_func(mut input: &mut Vec<Token>) -> Result<FuncDef, ParseError> {
     expect(Token::Lbrace, &mut input)?;
     let statement = parse_statement(&mut input)?;
     expect(Token::Rbrace, &mut input)?;
-    Ok(FuncDef::Function {
+
+    if !input.is_empty() {
+        return Err(ParseError::SyntaxError(
+            "extra code outside function".to_string(),
+        ));
+    }
+
+    Ok(AstFuncDef::Function {
         name: identifier,
         body: statement,
     })
@@ -235,16 +308,16 @@ fn parse_identifier(input: &mut Vec<Token>) -> Result<String, ParseError> {
     }
 }
 
-fn parse_statement(mut input: &mut Vec<Token>) -> Result<Statement, ParseError> {
+fn parse_statement(mut input: &mut Vec<Token>) -> Result<AstStatement, ParseError> {
     expect(Token::Return, &mut input)?;
     let exp = parse_exp(&mut input)?;
     expect(Token::SemiColon, &mut input)?;
-    Ok(Statement::Return(exp))
+    Ok(AstStatement::Return(exp))
 }
 
-fn parse_exp(mut input: &mut Vec<Token>) -> Result<Exp, ParseError> {
+fn parse_exp(mut input: &mut Vec<Token>) -> Result<AstExp, ParseError> {
     let int = parse_int(&mut input)?;
-    Ok(Exp::Constant(int))
+    Ok(AstExp::Constant(int))
 }
 
 fn parse_int(input: &mut Vec<Token>) -> Result<i32, ParseError> {
@@ -275,6 +348,3 @@ fn take_token(input: &mut Vec<Token>) -> Result<Token, ParseError> {
     }
     Ok(input.remove(0))
 }
-// fn codegen(mut _input: String) -> Result<(), Box<dyn Error>> {
-//     Ok(())
-// }
