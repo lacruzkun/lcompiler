@@ -1,3 +1,4 @@
 /target
 write_a_c_compiler/
 *.c
+*.s
