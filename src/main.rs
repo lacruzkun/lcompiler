@@ -1,6 +1,9 @@
 use clap::Parser;
 use regex::Regex;
-use std::{fs, process};
+use std::{
+    fs,
+    process::{self, Command},
+};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Token {
@@ -117,8 +120,10 @@ struct Args {
 
 fn main() {
     let mut arg = Args::parse();
-    let input = fs::read_to_string(arg.filename.expect("pass filename as argument"))
-        .expect("file should exist");
+    let mut file_name = arg.filename.expect("pass filename as argument");
+    let input = fs::read_to_string(file_name.clone()).expect("file should exist");
+    let mut assembly_file = String::new();
+
     let input = input.as_str();
     if arg.codegen {
         arg.parse = true;
@@ -128,35 +133,68 @@ fn main() {
     }
 
     if arg.lex {
-        let lex_r = lex(input);
-        let lex_result = match lex_r {
-            Ok(x) => {
-                println!("{:?}", x);
-                x
-            }
-            Err(e) => {
-                println!("{e}");
-                process::exit(1)
-            }
-        };
+        let lex_result = lex_phase(input);
+
         if arg.parse {
-            let parse_r = parse_ast(lex_result);
-            let parse_result = match parse_r {
-                Ok(x) => {
-                    println!("{:?}", x);
-                    x
-                }
-                Err(e) => {
-                    println!("{e}");
-                    process::exit(1)
-                }
-            };
+            let parse_result = parse_phase(lex_result);
+
             if arg.codegen {
-                let codegen_r = parse_asm(parse_result);
-                println!("{:?}", codegen_r);
+                assembly_file = codegen_phase(parse_result);
             }
         }
+    } else {
+        let lex_result = lex_phase(input);
+        let parse_result = parse_phase(lex_result);
+        assembly_file = codegen_phase(parse_result);
     }
+    file_name.pop();
+    file_name.pop();
+    let output_file_name = file_name.clone();
+    file_name.push('.');
+    file_name.push('s');
+    let assembly_file_name = file_name.clone();
+    fs::write(assembly_file_name.clone(), assembly_file).expect("should be able to write to file");
+
+    Command::new("gcc")
+        .args(&[assembly_file_name, "-o".to_string(), output_file_name])
+        .status()
+        .expect("gcc failed");
+}
+
+fn lex_phase(input: &str) -> Vec<Token> {
+    let lex_r = lex(input);
+    let lex_result = match lex_r {
+        Ok(x) => {
+            println!("{:?}", x);
+            x
+        }
+        Err(e) => {
+            println!("{e}");
+            process::exit(1)
+        }
+    };
+    lex_result
+}
+
+fn parse_phase(input: Vec<Token>) -> AstProg {
+    let parse_r = parse_ast(input);
+    let parse_result = match parse_r {
+        Ok(x) => {
+            println!("{:?}", x);
+            x
+        }
+        Err(e) => {
+            println!("{e}");
+            process::exit(1)
+        }
+    };
+    parse_result
+}
+
+fn codegen_phase(input: AstProg) -> String {
+    let codegen_r = parse_asm(input);
+    let output = emit_code_prog(codegen_r);
+    output
 }
 
 fn lex(mut input: &str) -> Result<Vec<Token>, LexError> {
@@ -231,50 +269,6 @@ fn parse_ast(mut input: Vec<Token>) -> Result<AstProg, ParseError> {
     Ok(AstProg::Program(program))
 }
 
-fn parse_asm(input: AstProg) -> AsmProg {
-    match input {
-        AstProg::Program(ast_program) => AsmProg::Program(parse_asm_func(ast_program)),
-    }
-}
-
-fn parse_asm_func(mut input: AstFuncDef) -> AsmFuncDef {
-    match input {
-        AstFuncDef::Function { name, body } => {
-            let asm_name = parse_asm_name(name);
-            let asm_instructions = parse_asm_instruction(body);
-            AsmFuncDef::Function {
-                name: asm_name,
-                instructions: asm_instructions,
-            }
-        }
-    }
-}
-
-fn parse_asm_name(input: String) -> String {
-    input
-}
-
-fn parse_asm_instruction(input: AstStatement) -> Vec<AsmInstruction> {
-    match input {
-        AstStatement::Return(exp) => {
-            let mut inst = vec![];
-            let asm_exp = parse_asm_exp(exp);
-            inst.push(AsmInstruction::Mov {
-                src: asm_exp,
-                dst: AsmOperand::Register,
-            });
-            inst.push(AsmInstruction::Ret);
-            inst
-        }
-    }
-}
-
-fn parse_asm_exp(input: AstExp) -> AsmOperand {
-    match input {
-        AstExp::Constant(x) => AsmOperand::Imm(x),
-    }
-}
-
 fn parse_func(mut input: &mut Vec<Token>) -> Result<AstFuncDef, ParseError> {
     expect(Token::Int, &mut input)?;
     let identifier = parse_identifier(&mut input)?;
@@ -347,4 +341,93 @@ fn take_token(input: &mut Vec<Token>) -> Result<Token, ParseError> {
         ));
     }
     Ok(input.remove(0))
+}
+
+// Asm ast generation
+fn parse_asm(input: AstProg) -> AsmProg {
+    match input {
+        AstProg::Program(ast_program) => AsmProg::Program(parse_asm_func(ast_program)),
+    }
+}
+
+fn parse_asm_func(input: AstFuncDef) -> AsmFuncDef {
+    match input {
+        AstFuncDef::Function { name, body } => {
+            let asm_name = parse_asm_name(name);
+            let asm_instructions = parse_asm_instruction(body);
+            AsmFuncDef::Function {
+                name: asm_name,
+                instructions: asm_instructions,
+            }
+        }
+    }
+}
+
+fn parse_asm_name(input: String) -> String {
+    input
+}
+
+fn parse_asm_instruction(input: AstStatement) -> Vec<AsmInstruction> {
+    match input {
+        AstStatement::Return(exp) => {
+            let mut inst = vec![];
+            let asm_exp = parse_asm_exp(exp);
+            inst.push(AsmInstruction::Mov {
+                src: asm_exp,
+                dst: AsmOperand::Register,
+            });
+            inst.push(AsmInstruction::Ret);
+            inst
+        }
+    }
+}
+
+fn parse_asm_exp(input: AstExp) -> AsmOperand {
+    match input {
+        AstExp::Constant(x) => AsmOperand::Imm(x),
+    }
+}
+
+fn emit_code_prog(input: AsmProg) -> String {
+    let mut output = String::new();
+    match input {
+        AsmProg::Program(program) => output.push_str(emit_code_func(program).as_str()),
+    }
+    output.push_str(format!("{:4}", "").as_str());
+    output.push_str(".section .note.GNU-stack,\"\",@progbits\n");
+    output
+}
+
+fn emit_code_func(input: AsmFuncDef) -> String {
+    let mut output = String::new();
+    output.push_str(format!("{:4}", "").as_str());
+    match input {
+        AsmFuncDef::Function { name, instructions } => output.push_str(
+            format!(".global {name}\n{name}:\n{}", emit_code_inst(instructions)).as_str(),
+        ),
+    }
+    output
+}
+
+fn emit_code_inst(input: Vec<AsmInstruction>) -> String {
+    let mut output = String::new();
+    for inst in input {
+        output.push_str(format!("{:4}", "").as_str());
+        match inst {
+            AsmInstruction::Mov { src, dst } => output.push_str(
+                format!("movl {}, {}\n", emit_code_ope(src), emit_code_ope(dst)).as_str(),
+            ),
+            AsmInstruction::Ret => output.push_str("ret\n"),
+        }
+    }
+    output
+}
+
+fn emit_code_ope(input: AsmOperand) -> String {
+    let mut output = String::new();
+    match input {
+        AsmOperand::Imm(int) => output.push_str(format!("${int}").as_str()),
+        AsmOperand::Register => output.push_str("%eax"),
+    }
+    output
 }
