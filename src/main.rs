@@ -1,7 +1,9 @@
 use clap::Parser;
 use regex::Regex;
+use std::error::Error;
 use std::{
     fs,
+    path::PathBuf,
     process::{self, Command},
 };
 
@@ -118,13 +120,34 @@ struct Args {
     filename: Option<String>,
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
+    // assume Args::parse() comes from clap or similar
     let mut arg = Args::parse();
-    let mut file_name = arg.filename.expect("pass filename as argument");
-    let input = fs::read_to_string(file_name.clone()).expect("file should exist");
-    let mut assembly_file = String::new();
+    let input_path = PathBuf::from(arg.filename.expect("pass filename as argument"));
 
+    // compute filenames in a robust way (file.c -> file.i, file.s, output -> file)
+    let processed_path = input_path.with_extension("i");
+    let assembly_path = input_path.with_extension("s");
+    let output_path = input_path.with_extension("");
+    let output_path = PathBuf::from(output_path);
+
+    // Preprocess: gcc -E -P <input> -o <processed>
+    let status = Command::new("gcc")
+        .arg("-E")
+        .arg("-P")
+        .arg(&input_path)
+        .arg("-o")
+        .arg(&processed_path)
+        .status()?;
+    if !status.success() {
+        return Err(format!("gcc preprocessing failed: {}", status).into());
+    }
+
+    // Read preprocessed input
+    let input = fs::read_to_string(&processed_path)?;
     let input = input.as_str();
+
+    // preserve the original shorthand semantics:
     if arg.codegen {
         arg.parse = true;
     }
@@ -132,33 +155,51 @@ fn main() {
         arg.lex = true;
     }
 
-    if arg.lex {
+    // Execute phases according to flags.
+    // We'll only write assembly and run final gcc when codegen is requested (safer).
+    let maybe_assembly: Option<String> = if arg.lex || arg.parse || arg.codegen {
+        // lex_phase takes &str in your original code
         let lex_result = lex_phase(input);
 
-        if arg.parse {
-            let parse_result = parse_phase(lex_result);
+        // parse if requested (parse_phase consumes the lex_result in your code)
+        let parse_result = if arg.parse || arg.codegen {
+            parse_phase(lex_result)
+        } else {
+            // If parse not requested we still call parse_phase for downstream compatibility,
+            // but this branch should not normally be reachable because flags were forced above.
+            parse_phase(lex_result)
+        };
 
-            if arg.codegen {
-                assembly_file = codegen_phase(parse_result);
-            }
+        // codegen only if requested
+        if arg.codegen {
+            Some(codegen_phase(parse_result))
+        } else {
+            None
         }
     } else {
         let lex_result = lex_phase(input);
-        let parse_result = parse_phase(lex_result);
-        assembly_file = codegen_phase(parse_result);
-    }
-    file_name.pop();
-    file_name.pop();
-    let output_file_name = file_name.clone();
-    file_name.push('.');
-    file_name.push('s');
-    let assembly_file_name = file_name.clone();
-    fs::write(assembly_file_name.clone(), assembly_file).expect("should be able to write to file");
+        let parse_result = { parse_phase(lex_result) };
+        Some(codegen_phase(parse_result))
+    };
 
-    Command::new("gcc")
-        .args(&[assembly_file_name, "-o".to_string(), output_file_name])
-        .status()
-        .expect("gcc failed");
+    // If we produced assembly, write it and run gcc to link/build the final binary
+    if let Some(assembly_text) = maybe_assembly {
+        fs::write(&assembly_path, &assembly_text)?;
+
+        let status = Command::new("gcc")
+            .arg(&assembly_path)
+            .arg("-o")
+            .arg(&output_path)
+            .status()?;
+        if !status.success() {
+            return Err(format!("gcc assembly/link failed: {}", status).into());
+        }
+    } else {
+        // no codegen requested — nothing to compile
+        println!("No codegen requested; skipping assembly and linking.");
+    }
+
+    Ok(())
 }
 
 fn lex_phase(input: &str) -> Vec<Token> {
